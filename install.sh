@@ -17,12 +17,14 @@ run-as-root(){
 }
 
 timer-sec(){
+  ini_secs=$((${1}))
   secs=$((${1}))
   while [ $secs -gt 0 ]; do
-    echo -ne "Waiting for $secs\033[0K seconds ...\r"
-    sleep 1
-    : $((secs--))
+    echo -e  "Waiting for $secs\033[0K seconds ..."
+    sleep 10
+    secs=$((secs - 10))
   done
+  echo "Done waiting $ini_secs"
 }
 
 install-packages() {
@@ -75,7 +77,7 @@ install-containerd() {
   then
           cecho "YELLOW" "Containerd is already installed."
   else
-          cecho "GREEN" "Installing containerd ..."
+          cecho "CYAN" "Installing containerd ..."
           # Add Docker's official GPG key:
           sudo apt-get update
           sudo apt-get install -y ca-certificates curl gnupg
@@ -100,7 +102,7 @@ install-containerd() {
 
   # Check if Containerd is running
   if sudo systemctl is-active containerd &> /dev/null; then
-    cecho "GREEN" "Containerd is running :)"
+    cecho "CYAN" "Containerd is running :)"
   else
     cecho "RED" "Containerd installation failed or is not running!"
   fi
@@ -109,7 +111,7 @@ install-containerd() {
 # Setup K8s Networking
 # Based on https://kubernetes.io/docs/setup/production-environment/container-runtimes/#forwarding-ipv4-and-letting-iptables-see-bridged-traffic
 setup-k8s-networking() {
-  cecho "GREEN" "Setting up Kubernetes networking ..."
+  cecho "CYAN" "Setting up Kubernetes networking ..."
   # Load required kernel modules
   cat <<EOF | sudo tee /etc/modules-load.d/k8s.conf
 overlay
@@ -136,7 +138,7 @@ install-k8s() {
   if [ -x "$(command -v kubectl)" ] && [ -x "$(command -v kubeadm)" ] && [ -x "$(command -v kubelet)" ]; then
     cecho "YELLOW" "Kubernetes components (kubectl, kubeadm, kubelet) are already installed."
   else
-    cecho "GREEN" "Installing Kubernetes components (kubectl, kubeadm, kubelet) ..."
+    cecho "CYAN" "Installing Kubernetes components (kubectl, kubeadm, kubelet) ..."
     sudo apt-get update
     # apt-transport-https may be a dummy package; if so, you can skip that package
     sudo apt-get install -y apt-transport-https ca-certificates curl gpg
@@ -154,7 +156,7 @@ create-k8s-cluster() {
   if [ -f "/etc/kubernetes/admin.conf" ]; then
     cecho "YELLOW" "A Kubernetes cluster already exists. Skipping cluster creation."
   else
-    cecho "GREEN" "Creating k8s cluster ..."
+    cecho "CYAN" "Creating k8s cluster ..."
     sudo kubeadm init --config kubeadm-config.yaml
 
     # Setup kubectl without sudo
@@ -167,7 +169,7 @@ create-k8s-cluster() {
     timer-sec $timer
 
     # Remove NoSchedule taint from all nodes
-    cecho "GREEN" "Allowing scheduling pods on master node ..."
+    cecho "CYAN" "Allowing scheduling pods on master node ..."
     kubectl taint nodes --all node-role.kubernetes.io/control-plane:NoSchedule-
   fi
 }
@@ -177,10 +179,10 @@ install-cni() {
   if kubectl get pods -n kube-flannel -l app=flannel | grep -q '1/1'; then
     cecho "YELLOW" "Flannel is already running. Skipping installation."
   else
-    cecho "GREEN" "Installing Flannel as primary CNI ..."
+    cecho "CYAN" "Installing Flannel as primary CNI ..."
     kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
-    timer-sec 60
-    kubectl wait pods -n kube-flannel  -l app=flannel --for condition=Ready --timeout=120s
+    cecho "CYAN" "Waiting for Flannel to be ready ..."
+    kubectl wait pods -n kube-flannel  -l app=flannel --for condition=Ready --timeout=600s
   fi
 }
 
@@ -189,12 +191,12 @@ install-multus() {
   if kubectl get pods -n kube-system -l app=multus | grep -q '1/1'; then
     cecho "YELLOW" "Multus is already running. Skipping installation."
   else
-    cecho "GREEN" "Installing Multus as meta CNI ..."
+    cecho "CYAN" "Installing Multus as meta CNI ..."
     git -C build/multus-cni pull || git clone https://github.com/k8snetworkplumbingwg/multus-cni.git build/multus-cni
     cd build/multus-cni
     cat ./deployments/multus-daemonset-thick.yml | kubectl apply -f -
-    timer-sec 30
-    kubectl wait pods -n kube-system  -l app=multus --for condition=Ready --timeout=120s
+    cecho "CYAN" "Waiting for Multus to be ready ..."
+    kubectl wait pods -n kube-system  -l app=multus --for condition=Ready --timeout=600s
   fi
 }
 
@@ -204,16 +206,16 @@ install-helm() {
   HELM_VERSION=$(helm version --short 2> /dev/null)
 
   if [[ "$HELM_VERSION" != *"v3"* ]]; then
-    cecho "GREEN" "Helm 3 is not installed. Proceeding to install Helm ..."
+    cecho "CYAN" "Helm 3 is not installed. Proceeding to install Helm ..."
 
     # Install Helm prerequisites
     curl -s https://baltocdn.com/helm/signing.asc | gpg --dearmor | sudo tee /usr/share/keyrings/helm.gpg > /dev/null
-    sudo apt-get install apt-transport-https --yes
+    sudo apt-get install -y apt-transport-https
 
     # Add Helm repository and install Helm
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/helm.gpg] https://baltocdn.com/helm/stable/debian/ all main" | sudo tee /etc/apt/sources.list.d/helm-stable-debian.list
     sudo apt-get update
-    sudo apt-get install helm
+    sudo apt-get install -y helm
   else
     cecho "YELLOW" "Helm 3 is already installed."
   fi
@@ -223,7 +225,7 @@ install-openebs() {
   if kubectl get pods -n openebs -l app=openebs | grep -q '1/1'; then
     cecho "YELLOW" "OpenEBS is already running. Skipping installation."
   else
-    cecho "GREEN" "Installing OpenEBS for storage management ..."
+    cecho "CYAN" "Installing OpenEBS for storage management ..."
     helm repo add openebs https://openebs.github.io/charts
     helm repo update
     helm upgrade --install openebs --namespace openebs openebs/openebs --create-namespace
@@ -237,30 +239,28 @@ setup-ovs-cni() {
   if [ -x "$(command -v ovs-vsctl)" ]; then
     cecho "YELLOW" "OpenVSwitch is already installed."
   else
-    cecho "GREEN" "Installing OpenVSwitch ..."
+    cecho "CYAN" "Installing OpenVSwitch ..."
     sudo apt-get update
-    sudo apt-get install openvswitch-switch
+    sudo apt-get install -y openvswitch-switch
   fi
 
-  cecho "GREEN" "Configuring bridges for use by ovs-cni ..."
+  cecho "CYAN" "Configuring bridges for use by ovs-cni ..."
   sudo ovs-vsctl --may-exist add-br n2br
   sudo ovs-vsctl --may-exist add-br n3br
   sudo ovs-vsctl --may-exist add-br n4br
 
   # install ovs-cni
   # install cluster-network-addons operator
-  cecho "GREEN" "Installing ovs-cni ..."
+  cecho "CYAN" "Installing ovs-cni ..."
 
   kubectl apply -f https://github.com/kubevirt/cluster-network-addons-operator/releases/download/v0.89.1/namespace.yaml
   kubectl apply -f https://github.com/kubevirt/cluster-network-addons-operator/releases/download/v0.89.1/network-addons-config.crd.yaml 
   kubectl apply -f https://github.com/kubevirt/cluster-network-addons-operator/releases/download/v0.89.1/operator.yaml
 
   kubectl apply -f https://gist.githubusercontent.com/niloysh/1f14c473ebc08a18c4b520a868042026/raw/d96f07e241bb18d2f3863423a375510a395be253/network-addons-config.yaml
-  
-  timer-sec 30
-  kubectl wait networkaddonsconfig cluster --for condition=Available
 
-
+  cecho "CYAN" "Waiting for ovs-cni to be ready ..."
+  kubectl wait networkaddonsconfig cluster --for condition=Available --timeout=600s
 }
 
 # run-as-root
